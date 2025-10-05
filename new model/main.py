@@ -1,12 +1,18 @@
-# main.py
 import pandas as pd
 import os
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 import re
 from scipy.optimize import differential_evolution
 
-# XGBoost imports (replacing ANN imports)
+# Import custom modules
 from drilling_xgboost import train_drilling_models, DrillingXGBoostPredictor
 from xgboost_hyperparameter_optimizer import optimize_xgboost_hyperparameters
 from baseline_models import train_baseline_models
@@ -178,743 +184,701 @@ def convert_range_to_number(value):
     except (ValueError, TypeError):
         pass
 
-    # ⭐ محاسبه میانگین ⭐ Handle range patterns like "20-25" or "20 - 25"
-    range_pattern = r'(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)'
-    match = re.search(range_pattern, value_str)
-    if match:
+    # ⭐ Pattern for ranges: "20-25", "20 - 25", "20to25", etc. ⭐
+    range_patterns = [
+        r'(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)',      # "20-25" or "20 - 25"
+        r'(\d+(?:\.\d+)?)\s*to\s*(\d+(?:\.\d+)?)',     # "20 to 25"
+        r'(\d+(?:\.\d+)?)\s*~\s*(\d+(?:\.\d+)?)',      # "20 ~ 25"
+        r'(\d+(?:\.\d+)?)\s*تا\s*(\d+(?:\.\d+)?)',     # "20 تا 25" (Persian)
+    ]
+
+    for pattern in range_patterns:
+        match = re.search(pattern, value_str, re.IGNORECASE)
+        if match:
+            try:
+                min_val = float(match.group(1))
+                max_val = float(match.group(2))
+                # ⭐ محاسبه میانگین ⭐
+                average = (min_val + max_val) / 2.0
+                return average
+            except (ValueError, TypeError):
+                continue
+
+    # Extract any number from the string (e.g., "25 kg" -> 25.0)
+    number_match = re.search(r'(\d+(?:\.\d+)?)', value_str)
+    if number_match:
         try:
-            num1 = float(match.group(1))
-            num2 = float(match.group(2))
-            return (num1 + num2) / 2.0
+            return float(number_match.group(1))
         except (ValueError, TypeError):
             pass
 
-    # Extract first number found
-    number_pattern = r'(\d+(?:\.\d+)?)'
-    match = re.search(number_pattern, value_str)
-    if match:
-        try:
-            return float(match.group(1))
-        except (ValueError, TypeError):
-            pass
-
-    # If all else fails
-    print(f"    ⚠️  Could not convert '{value}' to number. Using NaN.")
+    # If all else fails, return NaN
+    print(f"⚠️  Warning: Could not convert '{value}' to number. Returning NaN.")
     return np.nan
 
 def standardize_column_names(df):
     """
-    تبدیل نام‌های مختلف ستون‌ها به فرمت استاندارد
+    Standardize column names to match expected format
+    Handles different naming conventions
     ⭐ FIX: Also handles duplicate columns by keeping only the first occurrence ⭐
     """
-    # Comprehensive column name mapping
+    # Comprehensive mapping from various possible names to standard names
     column_mappings = {
         # Depth variations
-        'Depth': ['depth', 'md', 'measured depth', 'measured_depth', 'depth_m', 'depth_ft'],
-        
-        # WOB variations
-        'WOB': ['wob', 'weight on bit', 'mob', 'weight_on_bit', 'bit_weight', 'wob_klb', 'wob_klbs'],
-        
+        'depth': 'Depth',
+        'dept': 'Depth',
+        'md': 'Depth',
+        'measured depth': 'Depth',
+        'measured_depth': 'Depth',
+
+        # WOB variations (both 'mob' and 'wob' map to 'WOB')
+        'wob': 'WOB',
+        'mob': 'WOB',  # ⭐ This causes duplicate 'WOB' columns ⭐
+        'weight on bit': 'WOB',
+        'weight_on_bit': 'WOB',
+        'weight': 'WOB',
+
         # ROP variations
-        'ROP': ['rop', 'rate of penetration', 'penetration rate', 'drilling rate', 'rate_of_penetration'],
-        
+        'rop': 'ROP',
+        'rate of penetration': 'ROP',
+        'rate_of_penetration': 'ROP',
+        'penetration rate': 'ROP',
+        'penetration_rate': 'ROP',
+
         # RPM variations
-        'RPM': ['rpm', 'rotary speed', 'rotation', 'rotary_speed', 'rotation_speed'],
-        
+        'rpm': 'RPM',
+        'rotation': 'RPM',
+        'rotary speed': 'RPM',
+        'rotary_speed': 'RPM',
+        'rotary': 'RPM',
+
         # Torque variations
-        'Surface_Torque': ['torque', 'surface torque', 'surface_torque', 'rot_torque', 'rotary_torque'],
-        
-        # Flow rate (Q) variations
-        'Q': ['q', 'flow', 'flow rate', 'flow_rate', 'gpm', 'pump_rate', 'total_flow'],
-        
-        # SPP variations
-        'SPP': ['spp', 'standpipe pressure', 'standpipe_pressure', 'pump_pressure', 'surface_pressure'],
-        
-        # Hook Load variations
-        'Hook_Load': ['hook load', 'hook_load', 'hookload', 'hook', 'weight_indicator'],
-        
-        # Mud Weight variations
-        'MW': ['mw', 'mud weight', 'mud_weight', 'density', 'mud_density'],
-        
+        'torque': 'Surface_Torque',
+        'surface torque': 'Surface_Torque',
+        'surface_torque': 'Surface_Torque',
+        'tq': 'Surface_Torque',
+        'tor': 'Surface_Torque',
+
+        # Flow rate variations
+        'gpm': 'Q',
+        'q': 'Q',
+        'flow rate': 'Q',
+        'flow': 'Q',
+        'flow_rate': 'Q',
+        'pump rate': 'Q',
+        'pump_rate': 'Q',
+
+        # Pressure variations
+        'spp': 'SPP',
+        'standpipe pressure': 'SPP',
+        'standpipe_pressure': 'SPP',
+        'pressure': 'SPP',
+        'pump pressure': 'SPP',
+        'pump_pressure': 'SPP',
+
+        # Hook Load / Mud Weight variations
+        'mw': 'Hook_Load',
+        'mud weight': 'Hook_Load',
+        'mud_weight': 'Hook_Load',
+        'hook load': 'Hook_Load',
+        'hookload': 'Hook_Load',
+        'hook_load': 'Hook_Load',
+        'wt': 'Hook_Load',
+
         # Viscosity variations
-        'Viscosity': ['vis', 'viscosity', 'pv', 'plastic_viscosity', 'funnel_viscosity']
+        'vis': 'Viscosity',
+        'viscosity': 'Viscosity',
+        'visc': 'Viscosity',
+
+        # Other common columns
+        'time': 'Time',
+        'date': 'Date',
+        'hob': 'HOB',
+        'bit depth': 'Depth',
+        'bit_depth': 'Depth',
     }
 
-    # Create reverse mapping
-    reverse_map = {}
-    for standard_name, variations in column_mappings.items():
-        for var in variations:
-            reverse_map[var.lower().strip()] = standard_name
-
-    # ⭐ NEW: Track which standard names we've already mapped ⭐
-    already_mapped = set()
-
-    # Rename columns
+    # Create new column names
     new_columns = {}
     for col in df.columns:
-        col_lower = str(col).lower().strip()
-        
-        # Check if this column matches any variation
-        if col_lower in reverse_map:
-            standard_name = reverse_map[col_lower]
-            
-            # ⭐ FIX: Only map if we haven't seen this standard name before ⭐
-            if standard_name not in already_mapped:
-                new_columns[col] = standard_name
-                already_mapped.add(standard_name)
-            else:
-                # If duplicate, keep original name with suffix
-                new_columns[col] = f"{col}_duplicate"
+        # Clean the column name
+        col_clean = str(col).lower().strip()
+        col_clean = col_clean.replace('(', '').replace(')', '').replace('.', '').replace(':', '')
+        col_clean = ' '.join(col_clean.split())  # Remove extra spaces
+
+        if col_clean in column_mappings:
+            new_columns[col] = column_mappings[col_clean]
         else:
+            # Keep original if not in mapping
             new_columns[col] = col
 
     df_renamed = df.rename(columns=new_columns)
-    
-    # Print mapping results
-    print("\n📋 Column name standardization:")
-    for old, new in new_columns.items():
-        if old != new:
-            print(f"  '{old}' → '{new}'")
-    
+
+    # ⭐ FIX: Handle duplicate columns by keeping only the first occurrence ⭐
+    # This happens when both 'Mob' and 'Wob' exist and both map to 'WOB'
+    if df_renamed.columns.duplicated().any():
+        print(f"\n⚠️  Warning: Duplicate columns detected after standardization!")
+        duplicates = df_renamed.columns[df_renamed.columns.duplicated()].unique()
+        print(f"  Duplicates: {list(duplicates)}")
+
+        # Keep only the first occurrence of each column
+        df_renamed = df_renamed.loc[:, ~df_renamed.columns.duplicated()]
+        print(f"  → Kept first occurrence of each duplicate column")
+
     return df_renamed
 
-def load_drilling_data(file_path, verbose=True):
+def load_drilling_data(file_path, columns_to_drop=None, verbose=True):
     """
     🚀 Universal data loader که به صورت اتوماتیک header رو پیدا می‌کنه
+    و همه string ها رو به float تبدیل می‌کنه
+
+    Args:
+        file_path: Path to Excel file
+        columns_to_drop: List of column names to drop before processing
+        verbose: Print detailed information
+
+    Returns:
+        Clean pandas DataFrame with standardized columns (ALL NUMERIC)
     """
+    if not file_path or not os.path.exists(file_path):
+        raise FileNotFoundError(f"❌ File not found: {file_path}")
+
     if verbose:
-        print(f"\n{'='*70}")
+        print(f"\n{'='*80}")
         print(f"📂 Loading: {os.path.basename(file_path)}")
-        print(f"{'='*70}")
+        print(f"{'='*80}")
 
-    # Detect header row automatically
-    header_row = detect_header_row(file_path)
+    try:
+        # ⭐ Step 1: پیدا کردن اتوماتیک header row ⭐
+        header_row = detect_header_row(file_path, max_rows_to_check=15)
 
-    # Load with detected header
-    df = pd.read_excel(file_path, header=header_row)
+        # ⭐ Step 2: بارگذاری داده با header درست ⭐
+        data = pd.read_excel(file_path, header=header_row)
 
-    if verbose:
-        print(f"\n✅ Loaded {len(df)} rows × {len(df.columns)} columns")
-        print(f"📊 Original columns: {list(df.columns)}")
+        if verbose:
+            print(f"\n✓ Loaded {data.shape[0]} rows × {data.shape[1]} columns")
+            print(f"  Raw columns: {list(data.columns)[:10]}")
 
-    # Standardize column names
-    df = standardize_column_names(df)
+        # Step 3: Drop specified columns (before standardization)
+        if columns_to_drop is not None:
+            if not isinstance(columns_to_drop, list):
+                columns_to_drop = [columns_to_drop]
 
-    if verbose:
-        print(f"\n🔧 Standardized columns: {list(df.columns)}")
+            existing_cols = [col for col in columns_to_drop if col in data.columns]
+            if existing_cols:
+                data = data.drop(columns=existing_cols)
+                if verbose:
+                    print(f"\n🗑️  Dropped columns: {existing_cols}")
 
-    # Clean numeric columns
-    if verbose:
-        print(f"\n🧹 Cleaning numeric data...")
+        # Step 4: Standardize column names
+        data = standardize_column_names(data)
 
-    for col in df.columns:
-        if col not in ['Date', 'Time', 'Formation']:  # Skip non-numeric columns
-            df[col] = clean_numeric_column(df[col])
+        if verbose:
+            print(f"\n✓ Standardized columns:")
+            for i, col in enumerate(data.columns, 1):
+                print(f"  {i:2d}. {col}")
 
-    # Drop rows where ALL values are NaN
-    df_cleaned = df.dropna(how='all')
+        # Step 5: Define required and optional columns
+        required_columns = ['WOB', 'RPM', 'SPP', 'Q', 'Depth', 'ROP', 'Surface_Torque']
+        optional_columns = ['Hook_Load', 'Viscosity', 'Time', 'Date', 'HOB']
 
-    if verbose:
-        rows_dropped = len(df) - len(df_cleaned)
-        print(f"\n🗑️  Dropped {rows_dropped} completely empty rows")
-        print(f"✅ Final dataset: {len(df_cleaned)} rows × {len(df_cleaned.columns)} columns")
+        # Step 6: Check availability
+        available_required = [col for col in required_columns if col in data.columns]
+        available_optional = [col for col in optional_columns if col in data.columns]
+        missing_required = [col for col in required_columns if col not in data.columns]
 
-    return df_cleaned
+        if verbose:
+            print(f"\n📊 Column Status:")
+            print(f"  ✓ Available required ({len(available_required)}/{len(required_columns)}): {available_required}")
+            if available_optional:
+                print(f"  ✓ Available optional ({len(available_optional)}): {available_optional}")
+            if missing_required:
+                print(f"  ⚠️  Missing required ({len(missing_required)}): {missing_required}")
 
-def visualize_data(data, title_prefix=""):
-    """Create comprehensive visualizations of drilling data"""
-    
-    # Check required columns
-    required_cols = ['Depth', 'WOB', 'ROP', 'RPM', 'Surface_Torque', 'SPP', 'Q']
-    missing_cols = [col for col in required_cols if col not in data.columns]
-    
-    if missing_cols:
-        print(f"⚠️  Missing columns for visualization: {missing_cols}")
-        return
-    
-    fig, axes = plt.subplots(3, 2, figsize=(15, 12))
-    fig.suptitle(f'{title_prefix}Drilling Parameters Analysis', fontsize=16, fontweight='bold')
-    
-    # 1. ROP vs Depth
-    axes[0, 0].plot(data['ROP'], data['Depth'], 'b-', linewidth=1)
-    axes[0, 0].set_xlabel('ROP (m/hr)', fontsize=10)
-    axes[0, 0].set_ylabel('Depth (m)', fontsize=10)
-    axes[0, 0].set_title('Rate of Penetration vs Depth', fontweight='bold')
-    axes[0, 0].invert_yaxis()
-    axes[0, 0].grid(True, alpha=0.3)
-    
-    # 2. WOB vs Depth
-    axes[0, 1].plot(data['WOB'], data['Depth'], 'r-', linewidth=1)
-    axes[0, 1].set_xlabel('WOB (klbs)', fontsize=10)
-    axes[0, 1].set_ylabel('Depth (m)', fontsize=10)
-    axes[0, 1].set_title('Weight on Bit vs Depth', fontweight='bold')
-    axes[0, 1].invert_yaxis()
-    axes[0, 1].grid(True, alpha=0.3)
-    
-    # 3. RPM vs Depth
-    axes[1, 0].plot(data['RPM'], data['Depth'], 'g-', linewidth=1)
-    axes[1, 0].set_xlabel('RPM', fontsize=10)
-    axes[1, 0].set_ylabel('Depth (m)', fontsize=10)
-    axes[1, 0].set_title('Rotary Speed vs Depth', fontweight='bold')
-    axes[1, 0].invert_yaxis()
-    axes[1, 0].grid(True, alpha=0.3)
-    
-    # 4. Torque vs Depth
-    axes[1, 1].plot(data['Surface_Torque'], data['Depth'], 'm-', linewidth=1)
-    axes[1, 1].set_xlabel('Surface Torque (N.m)', fontsize=10)
-    axes[1, 1].set_ylabel('Depth (m)', fontsize=10)
-    axes[1, 1].set_title('Surface Torque vs Depth', fontweight='bold')
-    axes[1, 1].invert_yaxis()
-    axes[1, 1].grid(True, alpha=0.3)
-    
-    # 5. ROP vs WOB scatter
-    axes[2, 0].scatter(data['WOB'], data['ROP'], alpha=0.5, s=10)
-    axes[2, 0].set_xlabel('WOB (klbs)', fontsize=10)
-    axes[2, 0].set_ylabel('ROP (m/hr)', fontsize=10)
-    axes[2, 0].set_title('ROP vs WOB Relationship', fontweight='bold')
-    axes[2, 0].grid(True, alpha=0.3)
-    
-    # 6. ROP vs RPM scatter
-    axes[2, 1].scatter(data['RPM'], data['ROP'], alpha=0.5, s=10, c='orange')
-    axes[2, 1].set_xlabel('RPM', fontsize=10)
-    axes[2, 1].set_ylabel('ROP (m/hr)', fontsize=10)
-    axes[2, 1].set_title('ROP vs RPM Relationship', fontweight='bold')
-    axes[2, 1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.show()
+        # Step 7: Handle Hook_Load substitution
+        if 'Hook_Load' not in data.columns:
+            if 'Viscosity' in data.columns:
+                data['Hook_Load'] = data['Viscosity'].copy()
+                if 'Hook_Load' not in available_required:
+                    available_required.append('Hook_Load')
+                if verbose:
+                    print(f"  ℹ️  Using 'Viscosity' as Hook_Load substitute")
+            elif 'Mw' in data.columns:
+                data['Hook_Load'] = data['Mw'].copy()
+                if 'Hook_Load' not in available_required:
+                    available_required.append('Hook_Load')
+                if verbose:
+                    print(f"  ℹ️  Using 'Mw' as Hook_Load substitute")
 
-def plot_model_comparison(results_dict):
+        # Step 8: Clean all numeric columns
+        all_columns_to_clean = list(set(available_required + available_optional))
+
+        if verbose:
+            print(f"\n🧹 Cleaning {len(all_columns_to_clean)} numeric columns...")
+            print(f"{'='*80}")
+
+        for col in all_columns_to_clean:
+            if col in data.columns:
+                try:
+                    # Store original for analysis
+                    original_series = data[col].copy()
+
+                    # ⭐ اینجا اتفاق می‌افته: تبدیل string به float ⭐
+                    data[col] = clean_numeric_column(original_series)
+
+                    # Verify it's numeric now
+                    if not pd.api.types.is_numeric_dtype(data[col]):
+                        raise ValueError(f"❌ Column '{col}' is still not numeric! Dtype: {data[col].dtype}")
+
+                    if verbose:
+                        valid_count = data[col].notna().sum()
+                        total_count = len(data)
+                        valid_pct = 100 * valid_count / total_count
+
+                        if valid_count > 0:
+                            col_min = data[col].min()
+                            col_max = data[col].max()
+                            col_mean = data[col].mean()
+
+                            # بررسی چند تا رنج تبدیل شده
+                            range_count = 0
+                            for orig_val in original_series.head(100):
+                                val_str = str(orig_val)
+                                if '-' in val_str and val_str.count('-') == 1:
+                                    # Make sure it's a range, not negative number
+                                    if re.search(r'\d+\s*-\s*\d+', val_str):
+                                        range_count += 1
+
+                            range_info = f" | Ranges: {range_count}" if range_count > 0 else ""
+
+                            print(f"  ✓ {col:15s}: {valid_count:4d}/{total_count} ({valid_pct:5.1f}%) | "
+                                  f"[{col_min:10.2f}, {col_max:10.2f}] | μ={col_mean:10.2f}{range_info}")
+                        else:
+                            print(f"  ⚠️  {col:15s}: {valid_count:4d}/{total_count} ({valid_pct:5.1f}%) | All NaN!")
+
+                except Exception as e:
+                    if verbose:
+                        print(f"  ❌ {col:15s}: FAILED - {str(e)[:60]}")
+                    raise  # Re-raise to stop execution
+
+        print(f"{'='*80}")
+
+        # Step 9: Select final columns (only those available)
+        final_columns = [col for col in required_columns if col in data.columns]
+        if 'Hook_Load' in data.columns and 'Hook_Load' not in final_columns:
+            final_columns.append('Hook_Load')
+
+        # Check if we have minimum required columns
+        if len(final_columns) < 5:
+            print(f"\n⚠️  WARNING: Only {len(final_columns)} columns available. Minimum 5 required!")
+            print(f"  Available: {final_columns}")
+            print(f"  Missing: {[c for c in required_columns if c not in final_columns]}")
+
+        # Step 10: Remove rows with missing values
+        data_clean = data[final_columns].copy()
+        initial_rows = len(data_clean)
+        data_clean = data_clean.dropna()
+        final_rows = len(data_clean)
+
+        if verbose:
+            dropped_rows = initial_rows - final_rows
+            print(f"\n🧹 Removed {dropped_rows} rows with missing values")
+            print(f"  Final dataset: {final_rows} rows × {len(final_columns)} columns")
+
+        # Step 11: Final verification
+        if verbose:
+            print(f"\n✅ Data loading completed successfully!")
+            print(f"  Shape: {data_clean.shape}")
+            print(f"  Columns: {list(data_clean.columns)}")
+            print(f"  Memory usage: {data_clean.memory_usage(deep=True).sum() / 1024**2:.2f} MB")
+
+        return data_clean
+
+    except Exception as e:
+        print(f"\n❌ Error loading data: {str(e)}")
+        raise
+
+
+def train_models_with_separate_data(train_data, test_data, optimize_hyperparams=False):
     """
-    Compare different models' performance
+    ⭐ NEW: Train models using separate training and testing datasets ⭐
     
-    Parameters:
-    -----------
-    results_dict : dict
-        Dictionary with model names as keys and results dicts as values
-        Example: {'Ridge': {...}, 'Random Forest': {...}, 'XGBoost': {...}}
-    """
-    models = list(results_dict.keys())
-    r2_scores = [results_dict[model]['r2'] for model in models]
-    rmse_scores = [results_dict[model]['rmse'] for model in models]
-    
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # R² comparison
-    axes[0].bar(models, r2_scores, color=['#3498db', '#e74c3c', '#2ecc71'])
-    axes[0].set_ylabel('R² Score', fontsize=12)
-    axes[0].set_title('Model Comparison - R² Score', fontsize=14, fontweight='bold')
-    axes[0].set_ylim([0, 1])
-    axes[0].grid(True, alpha=0.3, axis='y')
-    
-    for i, v in enumerate(r2_scores):
-        axes[0].text(i, v + 0.02, f'{v:.4f}', ha='center', fontweight='bold')
-    
-    # RMSE comparison
-    axes[1].bar(models, rmse_scores, color=['#3498db', '#e74c3c', '#2ecc71'])
-    axes[1].set_ylabel('RMSE', fontsize=12)
-    axes[1].set_title('Model Comparison - RMSE', fontsize=14, fontweight='bold')
-    axes[1].grid(True, alpha=0.3, axis='y')
-    
-    for i, v in enumerate(rmse_scores):
-        axes[1].text(i, v + max(rmse_scores)*0.02, f'{v:.4f}', ha='center', fontweight='bold')
-    
-    plt.tight_layout()
-    plt.show()
-
-def plot_predictions_vs_actual(y_true, y_pred, model_name, target_name='ROP'):
-    """
-    Plot predicted vs actual values
-    
-    Parameters:
-    -----------
-    y_true : array, actual values
-    y_pred : array, predicted values
-    model_name : str, name of the model
-    target_name : str, name of target variable
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # Scatter plot
-    axes[0].scatter(y_true, y_pred, alpha=0.5, s=30)
-    
-    # Perfect prediction line
-    min_val = min(y_true.min(), y_pred.min())
-    max_val = max(y_true.max(), y_pred.max())
-    axes[0].plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
-    
-    axes[0].set_xlabel(f'Actual {target_name}', fontsize=12)
-    axes[0].set_ylabel(f'Predicted {target_name}', fontsize=12)
-    axes[0].set_title(f'{model_name} - Predicted vs Actual', fontsize=14, fontweight='bold')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
-    
-    # Residuals plot
-    residuals = y_true - y_pred
-    axes[1].scatter(y_pred, residuals, alpha=0.5, s=30)
-    axes[1].axhline(y=0, color='r', linestyle='--', linewidth=2)
-    axes[1].set_xlabel(f'Predicted {target_name}', fontsize=12)
-    axes[1].set_ylabel('Residuals', fontsize=12)
-    axes[1].set_title(f'{model_name} - Residual Plot', fontsize=14, fontweight='bold')
-    axes[1].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    plt.show()
-
-def optimize_drilling_parameters(data, rop_model, torque_model, 
-                                 fixed_spp=None, fixed_q=None, 
-                                 fixed_depth=None, fixed_hook_load=None):
-    """
-    Optimize WOB and RPM for maximum ROP while keeping torque in acceptable range
-    
-    Parameters:
-    -----------
-    data : DataFrame
-        Drilling data for extracting typical parameter ranges
-    rop_model : trained XGBoost model for ROP prediction
-    torque_model : trained XGBoost model for torque prediction
-    fixed_spp : float, fixed standpipe pressure (if None, uses median)
-    fixed_q : float, fixed flow rate (if None, uses median)
-    fixed_depth : float, fixed depth (if None, uses median)
-    fixed_hook_load : float, fixed hook load (if None, uses median)
+    Args:
+        train_data: DataFrame with training data
+        test_data: DataFrame with testing data
+        optimize_hyperparams: Whether to optimize XGBoost hyperparameters
     
     Returns:
-    --------
-    results : dict with optimization results
+        Dictionary containing trained models and results
     """
+    feature_columns = ['WOB', 'RPM', 'SPP', 'Q', 'Depth', 'Hook_Load']
     
-    # Set fixed parameters to median values if not provided
-    if fixed_spp is None:
-        fixed_spp = data['SPP'].median()
-    if fixed_q is None:
-        fixed_q = data['Q'].median()
-    if fixed_depth is None:
-        fixed_depth = data['Depth'].median()
-    if fixed_hook_load is None:
-        fixed_hook_load = data['Hook_Load'].median()
+    # Verify both datasets have required columns
+    required_cols = feature_columns + ['ROP', 'Surface_Torque']
+    for dataset_name, dataset in [('Training', train_data), ('Testing', test_data)]:
+        missing_cols = [col for col in required_cols if col not in dataset.columns]
+        if missing_cols:
+            raise ValueError(f"{dataset_name} data missing columns: {missing_cols}")
     
-    fixed_params = np.array([fixed_spp, fixed_q, fixed_depth, fixed_hook_load])
+    # Prepare training data
+    X_train = train_data[feature_columns].values
+    y_rop_train = train_data['ROP'].values
+    y_torque_train = train_data['Surface_Torque'].values
     
-    print(f"\n{'='*70}")
-    print("Fixed Parameters for Optimization:")
-    print(f"{'='*70}")
-    print(f"  SPP:        {fixed_spp:.2f}")
-    print(f"  Q:          {fixed_q:.2f}")
-    print(f"  Depth:      {fixed_depth:.2f}")
-    print(f"  Hook Load:  {fixed_hook_load:.2f}")
-    print(f"{'='*70}")
+    # Prepare testing data
+    X_test = test_data[feature_columns].values
+    y_rop_test = test_data['ROP'].values
+    y_torque_test = test_data['Surface_Torque'].values
     
-    # Define bounds for WOB and RPM based on data
-    wob_min, wob_max = data['WOB'].quantile([0.05, 0.95])
-    rpm_min, rpm_max = data['RPM'].quantile([0.05, 0.95])
+    print(f"\n{'='*80}")
+    print(f"📊 Dataset Information:")
+    print(f"  Training set: {len(X_train)} samples")
+    print(f"  Testing set:  {len(X_test)} samples")
+    print(f"{'='*80}")
     
-    bounds = [
-        (wob_min, wob_max),  # WOB bounds
-        (rpm_min, rpm_max)   # RPM bounds
-    ]
+    results = {}
     
-    print(f"\nOptimization Bounds:")
-    print(f"  WOB: [{wob_min:.2f}, {wob_max:.2f}]")
-    print(f"  RPM: [{rpm_min:.2f}, {rpm_max:.2f}]")
+    # ====== STEP 1: Train Baseline Models ======
+    print(f"\n{'='*80}")
+    print("STEP 1: Training Baseline Models (Ridge & Random Forest)")
+    print(f"{'='*80}")
     
-    # Run Differential Evolution optimization
-    de = DifferentialEvolution(pop_size=30, F=0.5, CR=0.7, max_iter=100)
-    results = de.optimize(bounds, rop_model, torque_model, fixed_params, verbose=True)
+    # Combine train and test for baseline (they expect to do their own split)
+    # Or we can modify baseline_models.py to accept separate train/test
+    # For now, let's just use train data and evaluate on test
+    baseline_results = train_baseline_models(train_data)
+    results['baseline'] = baseline_results
     
-    # Plot convergence
-    de.plot_convergence(results['fitness_history'])
+    # ====== STEP 2: Hyperparameter Optimization (Optional) ======
+    best_params_rop = None
+    best_params_torque = None
+    
+    if optimize_hyperparams:
+        print(f"\n{'='*80}")
+        print("STEP 2: XGBoost Hyperparameter Optimization")
+        print(f"{'='*80}")
+        
+        # Split training data for validation during optimization
+        X_train_opt, X_val_opt, y_rop_train_opt, y_rop_val_opt = train_test_split(
+            X_train, y_rop_train, test_size=0.2, random_state=42
+        )
+        _, _, y_torque_train_opt, y_torque_val_opt = train_test_split(
+            X_train, y_torque_train, test_size=0.2, random_state=42
+        )
+        
+        # Optimize ROP model
+        print("\n🎯 Optimizing ROP Model Hyperparameters...")
+        best_params_rop, rop_opt_history = optimize_xgboost_hyperparameters(
+            X_train_opt, y_rop_train_opt,
+            X_val_opt, y_rop_val_opt,
+            target_name='ROP',
+            pop_size=20,
+            max_iter=30
+        )
+        
+        # Optimize Torque model
+        print("\n🎯 Optimizing Torque Model Hyperparameters...")
+        best_params_torque, torque_opt_history = optimize_xgboost_hyperparameters(
+            X_train_opt, y_torque_train_opt,
+            X_val_opt, y_torque_val_opt,
+            target_name='Torque',
+            pop_size=20,
+            max_iter=30
+        )
+        
+        results['hyperparameter_optimization'] = {
+            'rop_params': best_params_rop,
+            'torque_params': best_params_torque,
+            'rop_history': rop_opt_history,
+            'torque_history': torque_opt_history
+        }
+    
+    # ====== STEP 3: Train XGBoost Models ======
+    print(f"\n{'='*80}")
+    print("STEP 3: Training XGBoost Models")
+    print(f"{'='*80}")
+    
+    # Train ROP model
+    print("\n🎯 Training ROP Model...")
+    rop_model = DrillingXGBoostPredictor(
+        n_estimators=int(best_params_rop['n_estimators']) if best_params_rop else 100,
+        max_depth=int(best_params_rop['max_depth']) if best_params_rop else 6,
+        learning_rate=best_params_rop['learning_rate'] if best_params_rop else 0.1,
+        subsample=best_params_rop['subsample'] if best_params_rop else 0.8,
+        colsample_bytree=best_params_rop['colsample_bytree'] if best_params_rop else 0.8,
+        gamma=best_params_rop['gamma'] if best_params_rop else 0,
+        min_child_weight=best_params_rop['min_child_weight'] if best_params_rop else 1,
+        reg_alpha=best_params_rop['reg_alpha'] if best_params_rop else 0,
+        reg_lambda=best_params_rop['reg_lambda'] if best_params_rop else 1
+    )
+    
+    # For early stopping, split training data into train/val
+    X_train_split, X_val_split, y_rop_train_split, y_rop_val_split = train_test_split(
+        X_train, y_rop_train, test_size=0.2, random_state=42
+    )
+    
+    rop_model.train(X_train_split, y_rop_train_split, X_val_split, y_rop_val_split)
+    rop_results = rop_model.evaluate(X_test, y_rop_test)
+    
+    print(f"\n✓ ROP Model Results:")
+    print(f"  RMSE: {rop_results['rmse']:.4f}")
+    print(f"  R²: {rop_results['r2']:.4f}")
+    print(f"  AARE: {rop_results['aare']:.2f}%")
+    
+    # Train Torque model
+    print("\n🎯 Training Torque Model...")
+    torque_model = DrillingXGBoostPredictor(
+        n_estimators=int(best_params_torque['n_estimators']) if best_params_torque else 100,
+        max_depth=int(best_params_torque['max_depth']) if best_params_torque else 6,
+        learning_rate=best_params_torque['learning_rate'] if best_params_torque else 0.1,
+        subsample=best_params_torque['subsample'] if best_params_torque else 0.8,
+        colsample_bytree=best_params_torque['colsample_bytree'] if best_params_torque else 0.8,
+        gamma=best_params_torque['gamma'] if best_params_torque else 0,
+        min_child_weight=best_params_torque['min_child_weight'] if best_params_torque else 1,
+        reg_alpha=best_params_torque['reg_alpha'] if best_params_torque else 0,
+        reg_lambda=best_params_torque['reg_lambda'] if best_params_torque else 1
+    )
+    
+    _, _, y_torque_train_split, y_torque_val_split = train_test_split(
+        X_train, y_torque_train, test_size=0.2, random_state=42
+    )
+    
+    torque_model.train(X_train_split, y_torque_train_split, X_val_split, y_torque_val_split)
+    torque_results = torque_model.evaluate(X_test, y_torque_test)
+    
+    print(f"\n✓ Torque Model Results:")
+    print(f"  RMSE: {torque_results['rmse']:.4f}")
+    print(f"  R²: {torque_results['r2']:.4f}")
+    print(f"  AARE: {torque_results['aare']:.2f}%")
+    
+    results['xgboost'] = {
+        'rop_model': rop_model,
+        'torque_model': torque_model,
+        'rop_results': rop_results,
+        'torque_results': torque_results
+    }
     
     return results
 
-def compare_optimization_methods(data, rop_model, torque_model, fixed_params):
-    """
-    Compare different optimization methods (DE, PSO, GA, etc.)
-    This is a placeholder for future implementation
-    """
-    # TODO: Implement comparison of different metaheuristic algorithms
-    pass
 
-def sensitivity_analysis(data, rop_model, torque_model, optimal_wob, optimal_rpm):
+def generate_report(results, output_dir='results'):
     """
-    Perform sensitivity analysis on optimized parameters
-    
-    Parameters:
-    -----------
-    data : DataFrame
-    rop_model : trained model
-    torque_model : trained model
-    optimal_wob : float, optimized WOB
-    optimal_rpm : float, optimized RPM
+    Generate comprehensive report with visualizations
     """
-    fixed_spp = data['SPP'].median()
-    fixed_q = data['Q'].median()
-    fixed_depth = data['Depth'].median()
-    fixed_hook_load = data['Hook_Load'].median()
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
     
-    # Vary WOB while keeping RPM constant
-    wob_range = np.linspace(optimal_wob * 0.7, optimal_wob * 1.3, 50)
-    rop_wob = []
-    torque_wob = []
+    print(f"\n{'='*80}")
+    print("📊 GENERATING COMPREHENSIVE REPORT")
+    print(f"{'='*80}")
     
-    for wob in wob_range:
-        params = np.array([[wob, optimal_rpm, fixed_spp, fixed_q, fixed_depth, fixed_hook_load]])
-        rop_wob.append(rop_model.predict(params)[0])
-        torque_wob.append(torque_model.predict(params)[0] * 0.737562)  # Convert to Lb.Ft
+    # ====== Model Comparison Plot ======
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5))
     
-    # Vary RPM while keeping WOB constant
-    rpm_range = np.linspace(optimal_rpm * 0.7, optimal_rpm * 1.3, 50)
-    rop_rpm = []
-    torque_rpm = []
+    models = ['Ridge', 'Random Forest', 'XGBoost']
     
-    for rpm in rpm_range:
-        params = np.array([[optimal_wob, rpm, fixed_spp, fixed_q, fixed_depth, fixed_hook_load]])
-        rop_rpm.append(rop_model.predict(params)[0])
-        torque_rpm.append(torque_model.predict(params)[0] * 0.737562)
+    # ROP R² scores
+    rop_r2_scores = [
+        results['baseline']['rop_ridge_r2'],
+        results['baseline']['rop_rf_r2'],
+        results['xgboost']['rop_results']['r2']
+    ]
     
-    # Plot sensitivity analysis
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle('Sensitivity Analysis', fontsize=16, fontweight='bold')
+    # Torque R² scores
+    torque_r2_scores = [
+        results['baseline']['torque_ridge_r2'],
+        results['baseline']['torque_rf_r2'],
+        results['xgboost']['torque_results']['r2']
+    ]
     
-    # ROP vs WOB
-    axes[0, 0].plot(wob_range, rop_wob, 'b-', linewidth=2)
-    axes[0, 0].axvline(optimal_wob, color='r', linestyle='--', label='Optimal WOB')
-    axes[0, 0].set_xlabel('WOB (klbs)', fontsize=12)
-    axes[0, 0].set_ylabel('ROP (m/hr)', fontsize=12)
-    axes[0, 0].set_title('ROP Sensitivity to WOB', fontweight='bold')
-    axes[0, 0].legend()
-    axes[0, 0].grid(True, alpha=0.3)
+    # Plot ROP
+    axes[0].bar(models, rop_r2_scores, color=['skyblue', 'lightcoral', 'lightgreen'])
+    axes[0].set_ylabel('R² Score')
+    axes[0].set_title('ROP Prediction - Model Comparison')
+    axes[0].set_ylim([0, 1])
+    axes[0].grid(axis='y', alpha=0.3)
     
-    # Torque vs WOB
-    axes[0, 1].plot(wob_range, torque_wob, 'r-', linewidth=2)
-    axes[0, 1].axvline(optimal_wob, color='r', linestyle='--', label='Optimal WOB')
-    axes[0, 1].axhline(13000, color='g', linestyle='--', label='Min Torque')
-    axes[0, 1].axhline(19000, color='g', linestyle='--', label='Max Torque')
-    axes[0, 1].set_xlabel('WOB (klbs)', fontsize=12)
-    axes[0, 1].set_ylabel('Torque (Lb.Ft)', fontsize=12)
-    axes[0, 1].set_title('Torque Sensitivity to WOB', fontweight='bold')
-    axes[0, 1].legend()
-    axes[0, 1].grid(True, alpha=0.3)
+    # Add value labels
+    for i, v in enumerate(rop_r2_scores):
+        axes[0].text(i, v + 0.02, f'{v:.4f}', ha='center', fontweight='bold')
     
-    # ROP vs RPM
-    axes[1, 0].plot(rpm_range, rop_rpm, 'b-', linewidth=2)
-    axes[1, 0].axvline(optimal_rpm, color='r', linestyle='--', label='Optimal RPM')
-    axes[1, 0].set_xlabel('RPM', fontsize=12)
-    axes[1, 0].set_ylabel('ROP (m/hr)', fontsize=12)
-    axes[1, 0].set_title('ROP Sensitivity to RPM', fontweight='bold')
-    axes[1, 0].legend()
-    axes[1, 0].grid(True, alpha=0.3)
+    # Plot Torque
+    axes[1].bar(models, torque_r2_scores, color=['skyblue', 'lightcoral', 'lightgreen'])
+    axes[1].set_ylabel('R² Score')
+    axes[1].set_title('Torque Prediction - Model Comparison')
+    axes[1].set_ylim([0, 1])
+    axes[1].grid(axis='y', alpha=0.3)
     
-    # Torque vs RPM
-    axes[1, 1].plot(rpm_range, torque_rpm, 'r-', linewidth=2)
-    axes[1, 1].axvline(optimal_rpm, color='r', linestyle='--', label='Optimal RPM')
-    axes[1, 1].axhline(13000, color='g', linestyle='--', label='Min Torque')
-    axes[1, 1].axhline(19000, color='g', linestyle='--', label='Max Torque')
-    axes[1, 1].set_xlabel('RPM', fontsize=12)
-    axes[1, 1].set_ylabel('Torque (Lb.Ft)', fontsize=12)
-    axes[1, 1].set_title('Torque Sensitivity to RPM', fontweight='bold')
-    axes[1, 1].legend()
-    axes[1, 1].grid(True, alpha=0.3)
+    # Add value labels
+    for i, v in enumerate(torque_r2_scores):
+        axes[1].text(i, v + 0.02, f'{v:.4f}', ha='center', fontweight='bold')
     
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f'{output_dir}/model_comparison.png', dpi=300, bbox_inches='tight')
+    print(f"✓ Saved: {output_dir}/model_comparison.png")
+    plt.close()
+    
+    # ====== Optimization History (if available) ======
+    if 'hyperparameter_optimization' in results:
+        fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+        
+        # ROP optimization history
+        rop_history = results['hyperparameter_optimization']['rop_history']
+        axes[0].plot(rop_history, 'b-', linewidth=2)
+        axes[0].set_xlabel('Generation')
+        axes[0].set_ylabel('Negative R² (Fitness)')
+        axes[0].set_title('ROP Hyperparameter Optimization')
+        axes[0].grid(True, alpha=0.3)
+        
+        # Torque optimization history
+        torque_history = results['hyperparameter_optimization']['torque_history']
+        axes[1].plot(torque_history, 'r-', linewidth=2)
+        axes[1].set_xlabel('Generation')
+        axes[1].set_ylabel('Negative R² (Fitness)')
+        axes[1].set_title('Torque Hyperparameter Optimization')
+        axes[1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/hyperparameter_optimization.png', dpi=300, bbox_inches='tight')
+        print(f"✓ Saved: {output_dir}/hyperparameter_optimization.png")
+        plt.close()
+    
+    # ====== Drilling Parameter Optimization Results (if available) ======
+    if 'drilling_optimization' in results:
+        opt_results = results['drilling_optimization']
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(opt_results['fitness_history'], 'g-', linewidth=2)
+        ax.set_xlabel('Generation')
+        ax.set_ylabel('Fitness (Negative ROP + Penalty)')
+        ax.set_title('Drilling Parameter Optimization Convergence')
+        ax.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig(f'{output_dir}/drilling_optimization_convergence.png', dpi=300, bbox_inches='tight')
+        print(f"✓ Saved: {output_dir}/drilling_optimization_convergence.png")
+        plt.close()
+        
+        # Print optimization results
+        print(f"\n🎯 Optimal Drilling Parameters:")
+        print(f"  WOB: {opt_results['optimal_wob']:.2f}")
+        print(f"  RPM: {opt_results['optimal_rpm']:.2f}")
+        print(f"  Predicted ROP: {opt_results['predicted_rop']:.4f}")
+        print(f"  Predicted Torque: {opt_results['predicted_torque']:.2f} Lb.Ft")
+    
+    print(f"\n✅ Report generation completed!")
+    print(f"  All results saved to: {output_dir}/")
 
-def generate_report(data, baseline_results, xgboost_results, optimization_results):
-    """
-    Generate a comprehensive text report of all results
-    
-    Parameters:
-    -----------
-    data : DataFrame
-    baseline_results : dict, results from baseline models
-    xgboost_results : dict, results from XGBoost models
-    optimization_results : dict, results from DE optimization
-    """
-    report = []
-    report.append("=" * 80)
-    report.append("DRILLING PARAMETER OPTIMIZATION - COMPREHENSIVE REPORT")
-    report.append("=" * 80)
-    report.append("")
-    
-    # Dataset Summary
-    report.append("1. DATASET SUMMARY")
-    report.append("-" * 80)
-    report.append(f"   Total Records: {len(data)}")
-    report.append(f"   Depth Range: {data['Depth'].min():.2f} - {data['Depth'].max():.2f} m")
-    report.append(f"   WOB Range: {data['WOB'].min():.2f} - {data['WOB'].max():.2f} klbs")
-    report.append(f"   RPM Range: {data['RPM'].min():.2f} - {data['RPM'].max():.2f}")
-    report.append(f"   ROP Range: {data['ROP'].min():.2f} - {data['ROP'].max():.2f} m/hr")
-    report.append(f"   Torque Range: {data['Surface_Torque'].min():.2f} - {data['Surface_Torque'].max():.2f} N.m")
-    report.append("")
-    
-    # Model Performance Comparison
-    report.append("2. MODEL PERFORMANCE COMPARISON")
-    report.append("-" * 80)
-    report.append("   ROP PREDICTION:")
-    report.append(f"      Ridge Regression    - R²: {baseline_results['rop_ridge_r2']:.4f}, RMSE: {baseline_results['rop_ridge_rmse']:.4f}")
-    report.append(f"      Random Forest       - R²: {baseline_results['rop_rf_r2']:.4f}, RMSE: {baseline_results['rop_rf_rmse']:.4f}")
-    report.append(f"      XGBoost (Optimized) - R²: {xgboost_results[0]['r2']:.4f}, RMSE: {xgboost_results[0]['rmse']:.4f}")
-    report.append("")
-    report.append("   TORQUE PREDICTION:")
-    report.append(f"      Ridge Regression    - R²: {baseline_results['torque_ridge_r2']:.4f}, RMSE: {baseline_results['torque_ridge_rmse']:.4f}")
-    report.append(f"      Random Forest       - R²: {baseline_results['torque_rf_r2']:.4f}, RMSE: {baseline_results['torque_rf_rmse']:.4f}")
-    report.append(f"      XGBoost (Optimized) - R²: {xgboost_results[1]['r2']:.4f}, RMSE: {xgboost_results[1]['rmse']:.4f}")
-    report.append("")
-    
-    # Optimization Results
-    report.append("3. OPTIMIZATION RESULTS")
-    report.append("-" * 80)
-    report.append(f"   Optimal WOB:        {optimization_results['optimal_wob']:.2f} klbs")
-    report.append(f"   Optimal RPM:        {optimization_results['optimal_rpm']:.2f}")
-    report.append(f"   Predicted ROP:      {optimization_results['predicted_rop']:.2f} m/hr")
-    report.append(f"   Predicted Torque:   {optimization_results['predicted_torque']:.2f} Lb.Ft")
-    report.append("")
-    
-    # Recommendations
-    report.append("4. RECOMMENDATIONS")
-    report.append("-" * 80)
-    
-    # Check if torque is within acceptable range
-    torque = optimization_results['predicted_torque']
-    if 13000 <= torque <= 19000:
-        report.append("   ✅ Optimized parameters result in torque within acceptable range")
-    elif torque < 13000:
-        report.append("   ⚠️  Torque below minimum threshold - consider increasing WOB or RPM")
-    else:
-        report.append("   ⚠️  Torque above maximum threshold - consider reducing WOB or RPM")
-    
-    # ROP improvement
-    current_avg_rop = data['ROP'].mean()
-    rop_improvement = ((optimization_results['predicted_rop'] - current_avg_rop) / current_avg_rop) * 100
-    report.append(f"   Expected ROP improvement: {rop_improvement:.1f}% over current average")
-    report.append("")
-    
-    report.append("=" * 80)
-    report.append("END OF REPORT")
-    report.append("=" * 80)
-    
-    # Print and save report
-    report_text = "\n".join(report)
-    print(report_text)
-    
-    # Save to file
-    with open('drilling_optimization_report.txt', 'w') as f:
-        f.write(report_text)
-    
-    print("\n📄 Report saved to: drilling_optimization_report.txt")
 
 def main():
     """
-    Main execution function for drilling parameter optimization using XGBoost
+    ⭐ UPDATED: Main execution flow with separate train/test files ⭐
     """
-    print("\n" + "="*80)
-    print("DRILLING PARAMETER OPTIMIZATION WITH XGBOOST")
-    print("="*80)
+    print(f"\n{'='*80}")
+    print("🚀 DRILLING OPTIMIZATION SYSTEM - XGBoost Version")
+    print(f"{'='*80}")
     
-    # Step 1: Load data
-    file_path = input("\nEnter the path to your Excel file: ").strip('"').strip("'")
+    # ====== Configuration ======
+    TRAIN_FILE = 'train_data.xlsx'  # ⭐ Training data file ⭐
+    TEST_FILE = 'test_data.xlsx'    # ⭐ Testing data file ⭐
+    OPTIMIZE_HYPERPARAMETERS = True  # Set to True to optimize XGBoost hyperparameters
+    OPTIMIZE_DRILLING_PARAMS = True  # Set to True to optimize WOB/RPM
     
-    if not os.path.exists(file_path):
-        print(f"❌ Error: File not found: {file_path}")
-        return
+    # ====== Load Training Data ======
+    print(f"\n{'='*80}")
+    print("LOADING TRAINING DATA")
+    print(f"{'='*80}")
     
-    try:
-        data = load_drilling_data(file_path)
-    except Exception as e:
-        print(f"❌ Error loading data: {str(e)}")
-        return
-    
-    # Check for required columns
-    required_columns = ['WOB', 'RPM', 'SPP', 'Q', 'Depth', 'Hook_Load', 'ROP', 'Surface_Torque']
-    missing_columns = [col for col in required_columns if col not in data.columns]
-    
-    if missing_columns:
-        print(f"\n❌ Error: Missing required columns: {missing_columns}")
-        print(f"Available columns: {list(data.columns)}")
-        return
-    
-    # Remove rows with missing values in required columns
-    data_clean = data[required_columns].dropna()
-    print(f"\n✅ Clean dataset: {len(data_clean)} rows (removed {len(data) - len(data_clean)} rows with missing values)")
-    
-    # Step 2: Visualize data
-    print("\n" + "="*80)
-    print("STEP 1: DATA VISUALIZATION")
-    print("="*80)
-    visualize_data(data_clean)
-    
-    # Step 3: Train baseline models
-    print("\n" + "="*80)
-    print("STEP 2: TRAINING BASELINE MODELS")
-    print("="*80)
-    baseline_results = train_baseline_models(data_clean)
-    
-    # Step 4: Hyperparameter optimization for XGBoost
-    print("\n" + "="*80)
-    print("STEP 3: XGBOOST HYPERPARAMETER OPTIMIZATION")
-    print("="*80)
-    
-    optimize_hyperparams = input("\nDo you want to optimize XGBoost hyperparameters? (yes/no): ").strip().lower()
-    
-    if optimize_hyperparams in ['yes', 'y']:
-        print("\n🔍 Optimizing ROP model hyperparameters...")
-        best_rop_params = optimize_xgboost_hyperparameters(
-            data_clean, 
-            target_column='ROP',
-            pop_size=20,
-            max_iter=30
-        )
-        
-        print("\n🔍 Optimizing Torque model hyperparameters...")
-        best_torque_params = optimize_xgboost_hyperparameters(
-            data_clean,
-            target_column='Surface_Torque',
-            pop_size=20,
-            max_iter=30
-        )
-        
-        # Train final models with optimized hyperparameters
-        print("\n" + "="*80)
-        print("STEP 4: TRAINING OPTIMIZED XGBOOST MODELS")
-        print("="*80)
-        
-        # Prepare data
-        feature_columns = ['WOB', 'RPM', 'SPP', 'Q', 'Depth', 'Hook_Load']
-        X = data_clean[feature_columns].values
-        
-        # Train ROP model with optimized params
-        from sklearn.model_selection import train_test_split
-        y_rop = data_clean['ROP'].values
-        X_train, X_test, y_rop_train, y_rop_test = train_test_split(
-            X, y_rop, test_size=0.2, random_state=42
-        )
-        
-        rop_model = DrillingXGBoostPredictor(
-            n_estimators=int(best_rop_params[0]),
-            max_depth=int(best_rop_params[1]),
-            learning_rate=best_rop_params[2],
-            subsample=best_rop_params[3],
-            colsample_bytree=best_rop_params[4],
-            gamma=best_rop_params[5],
-            min_child_weight=int(best_rop_params[6]),
-            reg_alpha=best_rop_params[7],
-            reg_lambda=best_rop_params[8]
-        )
-        
-        X_train_split, X_val_split, y_rop_train_split, y_rop_val_split = train_test_split(
-            X_train, y_rop_train, test_size=0.2, random_state=42
-        )
-        rop_model.train(X_train_split, y_rop_train_split, X_val_split, y_rop_val_split)
-        rop_results = rop_model.evaluate(X_test, y_rop_test)
-        
-        # Train Torque model with optimized params
-        y_torque = data_clean['Surface_Torque'].values
-        X_train, X_test, y_torque_train, y_torque_test = train_test_split(
-            X, y_torque, test_size=0.2, random_state=42
-        )
-        
-        torque_model = DrillingXGBoostPredictor(
-            n_estimators=int(best_torque_params[0]),
-            max_depth=int(best_torque_params[1]),
-            learning_rate=best_torque_params[2],
-            subsample=best_torque_params[3],
-            colsample_bytree=best_torque_params[4],
-            gamma=best_torque_params[5],
-            min_child_weight=int(best_torque_params[6]),
-            reg_alpha=best_torque_params[7],
-            reg_lambda=best_torque_params[8]
-        )
-        
-        X_train_split, X_val_split, y_torque_train_split, y_torque_val_split = train_test_split(
-            X_train, y_torque_train, test_size=0.2, random_state=42
-        )
-        torque_model.train(X_train_split, y_torque_train_split, X_val_split, y_torque_val_split)
-        torque_results = torque_model.evaluate(X_test, y_torque_test)
-        
-    else:
-        # Train with default parameters
-        print("\n" + "="*80)
-        print("STEP 4: TRAINING XGBOOST MODELS (Default Parameters)")
-        print("="*80)
-        rop_model, torque_model, rop_results, torque_results = train_drilling_models(data_clean)
-    
-    # Step 5: Compare models
-    print("\n" + "="*80)
-    print("STEP 5: MODEL PERFORMANCE COMPARISON")
-    print("="*80)
-    
-    rop_comparison = {
-        'Ridge': {'r2': baseline_results['rop_ridge_r2'], 'rmse': baseline_results['rop_ridge_rmse']},
-        'Random Forest': {'r2': baseline_results['rop_rf_r2'], 'rmse': baseline_results['rop_rf_rmse']},
-        'XGBoost': {'r2': rop_results['r2'], 'rmse': rop_results['rmse']}
-    }
-    
-    torque_comparison = {
-        'Ridge': {'r2': baseline_results['torque_ridge_r2'], 'rmse': baseline_results['torque_ridge_rmse']},
-        'Random Forest': {'r2': baseline_results['torque_rf_r2'], 'rmse': baseline_results['torque_rf_rmse']},
-        'XGBoost': {'r2': torque_results['r2'], 'rmse': torque_results['rmse']}
-    }
-    
-    print("\n📊 ROP Model Comparison:")
-    plot_model_comparison(rop_comparison)
-    
-    print("\n📊 Torque Model Comparison:")
-    plot_model_comparison(torque_comparison)
-    
-    # Step 6: Plot predictions
-    print("\n" + "="*80)
-    print("STEP 6: PREDICTION VISUALIZATION")
-    print("="*80)
-    
-    feature_columns = ['WOB', 'RPM', 'SPP', 'Q', 'Depth', 'Hook_Load']
-    X = data_clean[feature_columns].values
-    y_rop = data_clean['ROP'].values
-    y_torque = data_clean['Surface_Torque'].values
-    
-    from sklearn.model_selection import train_test_split
-    X_train, X_test, y_rop_train, y_rop_test = train_test_split(X, y_rop, test_size=0.2, random_state=42)
-    X_train, X_test, y_torque_train, y_torque_test = train_test_split(X, y_torque, test_size=0.2, random_state=42)
-    
-    plot_predictions_vs_actual(y_rop_test, rop_results['predictions'], 'XGBoost', 'ROP')
-    plot_predictions_vs_actual(y_torque_test, torque_results['predictions'], 'XGBoost', 'Torque')
-    
-    # Step 7: Optimize drilling parameters
-    print("\n" + "="*80)
-    print("STEP 7: DRILLING PARAMETER OPTIMIZATION")
-    print("="*80)
-    
-    optimization_results = optimize_drilling_parameters(
-        data_clean, rop_model, torque_model
+    train_data = load_drilling_data(
+        TRAIN_FILE,
+        columns_to_drop=None,
+        verbose=True
     )
     
-    # Step 8: Sensitivity analysis
-    print("\n" + "="*80)
-    print("STEP 8: SENSITIVITY ANALYSIS")
-    print("="*80)
+    # ====== Load Testing Data ======
+    print(f"\n{'='*80}")
+    print("LOADING TESTING DATA")
+    print(f"{'='*80}")
     
-    sensitivity_analysis(
-        data_clean, 
-        rop_model, 
-        torque_model,
-        optimization_results['optimal_wob'],
-        optimization_results['optimal_rpm']
+    test_data = load_drilling_data(
+        TEST_FILE,
+        columns_to_drop=None,
+        verbose=True
     )
     
-    # Step 9: Generate comprehensive report
-    print("\n" + "="*80)
-    print("STEP 9: GENERATING COMPREHENSIVE REPORT")
-    print("="*80)
-    
-    generate_report(
-        data_clean,
-        baseline_results,
-        (rop_results, torque_results),
-        optimization_results
+    # ====== Train Models ======
+    results = train_models_with_separate_data(
+        train_data,
+        test_data,
+        optimize_hyperparams=OPTIMIZE_HYPERPARAMETERS
     )
     
-    print("\n" + "="*80)
-    print("✅ ANALYSIS COMPLETE!")
-    print("="*80)
-    print("\nThank you for using the Drilling Parameter Optimization System!")
+    # ====== Optimize Drilling Parameters (Optional) ======
+    if OPTIMIZE_DRILLING_PARAMS:
+        print(f"\n{'='*80}")
+        print("STEP 4: Optimizing Drilling Parameters (WOB, RPM)")
+        print(f"{'='*80}")
+        
+        # Use first row of test data as fixed parameters
+        fixed_params = test_data[['SPP', 'Q', 'Depth', 'Hook_Load']].iloc[0].values
+        
+        print(f"\n📍 Fixed Parameters:")
+        print(f"  SPP: {fixed_params[0]:.2f}")
+        print(f"  Q: {fixed_params[1]:.2f}")
+        print(f"  Depth: {fixed_params[2]:.2f}")
+        print(f"  Hook_Load: {fixed_params[3]:.2f}")
+        
+        # Define bounds for WOB and RPM
+        bounds = [
+            (train_data['WOB'].min(), train_data['WOB'].max()),    # WOB bounds
+            (train_data['RPM'].min(), train_data['RPM'].max())     # RPM bounds
+        ]
+        
+        print(f"\n🎯 Optimization Bounds:")
+        print(f"  WOB: [{bounds[0][0]:.2f}, {bounds[0][1]:.2f}]")
+        print(f"  RPM: [{bounds[1][0]:.2f}, {bounds[1][1]:.2f}]")
+        
+        # Create wrapper class for optimization
+        class ModelWrapper:
+            def __init__(self, rop_model, torque_model):
+                self.rop_model = rop_model
+                self.torque_model = torque_model
+            
+            def predict_rop(self, params):
+                return self.rop_model.predict(params.reshape(1, -1))[0]
+            
+            def predict_torque(self, params):
+                return self.torque_model.predict(params.reshape(1, -1))[0]
+        
+        model_wrapper = ModelWrapper(
+            results['xgboost']['rop_model'],
+            results['xgboost']['torque_model']
+        )
+        
+        # Run optimization
+        de_optimizer = DifferentialEvolution(
+            pop_size=30,
+            F=0.5,
+            CR=0.7,
+            max_iter=50
+        )
+        
+        opt_results = de_optimizer.optimize(
+            model_wrapper,
+            fixed_params,
+            bounds,
+            verbose=True
+        )
+        
+        results['drilling_optimization'] = opt_results
+    
+    # ====== Generate Report ======
+    generate_report(results, output_dir='results')
+    
+    print(f"\n{'='*80}")
+    print("✅ ALL PROCESSES COMPLETED SUCCESSFULLY!")
+    print(f"{'='*80}\n")
+
 
 if __name__ == "__main__":
     main()
