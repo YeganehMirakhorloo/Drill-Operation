@@ -128,7 +128,8 @@ class DrillingXGBoostPredictor:
             'rmse': rmse,
             'r2': r2,
             'aare': aare,
-            'predictions': predictions
+            'predictions': predictions,
+            'y_true': y_test  # ✅ ADD THIS LINE
         }
     
     def get_feature_importance(self):

@@ -30,6 +30,8 @@ from baseline_models import train_baseline_models
 from drilling_xgboost import DrillingXGBoostPredictor  # ⭐ FIXED: Changed from xgboost_predictor
 from xgboost_hyperparameter_optimizer import optimize_xgboost_hyperparameters
 from de_optimizer import DifferentialEvolution  # ⭐ FIXED: Changed from differential_evolution
+# Import plotting utilities
+from plot_utils import plot_both_models_comparison, plot_prediction_comparison
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -399,7 +401,73 @@ def train_models_with_separate_data(train_data, test_data, optimize_hyperparams=
     print(f"\n{'='*80}")
     print("✅ All models trained successfully!")
     print(f"{'='*80}")
+    # ====== STEP 3: Generate Prediction Comparison Plots ======
+    print(f"\n{'='*80}")
+    print("STEP 3: Generating Prediction Comparison Plots")
+    print(f"{'='*80}")
     
+    
+    # Prepare data for plotting
+    plot_data = {}
+    
+    for target_name in available_targets:
+        if target_name in results['models']:
+            model = results['models'][target_name]['model']
+            test_results = results['models'][target_name]['test_results']
+            
+            # Get training predictions
+            y_train_actual = train_data[target_name].values
+            y_train_pred = model.predict(X_train)
+            
+            # Get test predictions (already available)
+            y_test_actual = test_results['y_true']
+            y_test_pred = test_results['predictions']
+            
+            # Store for plotting
+            plot_data[target_name] = {
+                'train_actual': y_train_actual,
+                'train_pred': y_train_pred,
+                'test_actual': y_test_actual,
+                'test_pred': y_test_pred
+            }
+    
+    # Generate plots based on available targets
+    if 'ROP' in plot_data and 'Surface_Torque' in plot_data:
+        print("\n📊 Generating combined plot for ROP and Torque...")
+        plot_both_models_comparison(
+            plot_data['ROP']['train_actual'], plot_data['ROP']['train_pred'],
+            plot_data['ROP']['test_actual'], plot_data['ROP']['test_pred'],
+            plot_data['Surface_Torque']['train_actual'], plot_data['Surface_Torque']['train_pred'],
+            plot_data['Surface_Torque']['test_actual'], plot_data['Surface_Torque']['test_pred'],
+            save_path='results_comparison_xgboost.png'
+        )
+    else:
+        # Plot individual models
+        if 'ROP' in plot_data:
+            print("\n📊 Generating ROP prediction plot...")
+            plot_prediction_comparison(
+                plot_data['ROP']['train_actual'], plot_data['ROP']['train_pred'],
+                plot_data['ROP']['test_actual'], plot_data['ROP']['test_pred'],
+                target_name='ROP',
+                save_path='results_comparison_rop_xgboost.png'
+            )
+        
+        if 'Surface_Torque' in plot_data:
+            print("\n📊 Generating Torque prediction plot...")
+            plot_prediction_comparison(
+                plot_data['Surface_Torque']['train_actual'], plot_data['Surface_Torque']['train_pred'],
+                plot_data['Surface_Torque']['test_actual'], plot_data['Surface_Torque']['test_pred'],
+                target_name='Torque',
+                save_path='results_comparison_torque_xgboost.png'
+            )
+    
+    # Store plot data in results
+    results['plot_data'] = plot_data
+    
+    print(f"\n{'='*80}")
+    print("✅ All models trained successfully!")
+    print(f"{'='*80}")
+
     return results
 
 
@@ -520,9 +588,16 @@ def generate_report(results, output_dir='results'):
         plt.savefig(os.path.join(output_dir, 'optimization_history.png'), dpi=300, bbox_inches='tight')
         print(f"✓ Saved: optimization_history.png")
         plt.close()
-
+    
     # ====== Plot 3: Predictions vs Actual ======
-    if results.get('models'):
+    # Check if plots were already generated during training
+    if 'plot_data' in results:
+        print(f"✓ Prediction comparison plots already generated during training")
+        print(f"  - Skipping duplicate plot generation")
+    elif results.get('models'):
+        # Generate plots only if not already created
+        print(f"\n📊 Generating prediction vs actual plots...")
+        
         fig, axes = plt.subplots(1, len(available_targets), figsize=(7*len(available_targets), 6))
 
         if len(available_targets) == 1:
@@ -532,21 +607,21 @@ def generate_report(results, output_dir='results'):
             if target in results['models']:
                 ax = axes[idx]
                 test_results = results['models'][target]['test_results']
-                
+
                 y_true = test_results.get('y_true', [])
                 predictions = test_results.get('predictions', [])
-                
+
                 # Scatter plot
                 ax.scatter(y_true, predictions, alpha=0.5, s=20)
-                
+
                 # Perfect prediction line
-                min_val = min(min(y_true) if len(y_true) > 0 else 0, 
-                             min(predictions) if len(predictions) > 0 else 0)
-                max_val = max(max(y_true) if len(y_true) > 0 else 1, 
-                             max(predictions) if len(predictions) > 0 else 1)
-                ax.plot([min_val, max_val], [min_val, max_val], 
-                       'r--', linewidth=2, label='Perfect Prediction')
-                
+                min_val = min(min(y_true) if len(y_true) > 0 else 0,
+                            min(predictions) if len(predictions) > 0 else 0)
+                max_val = max(max(y_true) if len(y_true) > 0 else 1,
+                            max(predictions) if len(predictions) > 0 else 1)
+                ax.plot([min_val, max_val], [min_val, max_val],
+                    'r--', linewidth=2, label='Perfect Prediction')
+
                 ax.set_xlabel(f'Actual {target}', fontsize=12, fontweight='bold')
                 ax.set_ylabel(f'Predicted {target}', fontsize=12, fontweight='bold')
                 ax.set_title(f'{target} - Predictions vs Actual\nR² = {test_results["r2"]:.4f}',
@@ -558,6 +633,7 @@ def generate_report(results, output_dir='results'):
         plt.savefig(os.path.join(output_dir, 'predictions_vs_actual.png'), dpi=300, bbox_inches='tight')
         print(f"✓ Saved: predictions_vs_actual.png")
         plt.close()
+
 
     # ====== Print Summary Report ======
     print(f"\n{'='*80}")
