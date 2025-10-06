@@ -407,118 +407,202 @@ def train_models_with_separate_data(train_data, test_data, optimize_hyperparams=
 def generate_report(results, output_dir='results'):
     """
     Generate comprehensive report with visualizations
-    
+
     Args:
         results: Dictionary containing all training results
         output_dir: Directory to save plots
     """
     os.makedirs(output_dir, exist_ok=True)
-    
+
     print(f"\n{'='*80}")
     print("📊 Generating Report")
     print(f"{'='*80}")
-    
+
     # Get available targets
     available_targets = results.get('targets', [])
-    
+
     if not available_targets:
         print("⚠️  No targets available for reporting")
         return
-    
+
     # ====== Plot 1: Model Comparison ======
     if results.get('baseline') and results.get('models'):
         fig, axes = plt.subplots(1, len(available_targets), figsize=(7*len(available_targets), 6))
-        
+
         if len(available_targets) == 1:
             axes = [axes]
-        
+
         for idx, target in enumerate(available_targets):
             ax = axes[idx]
-            
+
             models = []
             r2_scores = []
-            
+
+            # Determine target key for baseline results
+            if target == 'ROP':
+                target_key = 'rop'
+            elif target == 'Surface_Torque':
+                target_key = 'torque'
+            else:
+                target_key = target.lower()
+
             # Get baseline results if available
-            if results['baseline']:
-                baseline = results['baseline']
-                if target in baseline:
-                    models.extend(['Ridge', 'RandomForest'])
-                    r2_scores.extend([
-                        baseline[target]['ridge']['test']['r2'],
-                        baseline[target]['rf']['test']['r2']
-                    ])
-            
+            if results['baseline'] and target_key in results['baseline']:
+                baseline = results['baseline'][target_key]
+                models.extend(['Ridge', 'RandomForest'])
+                r2_scores.extend([
+                    baseline['ridge_r2'],  # ✅ FIXED: Correct key structure
+                    baseline['rf_r2']       # ✅ FIXED: Correct key structure
+                ])
+
             # Get XGBoost results
             if target in results['models']:
                 models.append('XGBoost')
                 r2_scores.append(results['models'][target]['test_results']['r2'])
-            
+
             # Plot
             colors = ['#3498db', '#2ecc71', '#e74c3c'][:len(models)]
             bars = ax.bar(models, r2_scores, color=colors, alpha=0.7, edgecolor='black')
-            
+
             # Add value labels on bars
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height,
                        f'{height:.4f}',
                        ha='center', va='bottom', fontweight='bold')
-            
+
             ax.set_ylabel('R² Score', fontsize=12, fontweight='bold')
             ax.set_title(f'{target} Prediction - Model Comparison',
                         fontsize=14, fontweight='bold')
             ax.set_ylim([0, 1.1])
             ax.grid(True, alpha=0.3, axis='y')
-            
+
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, 'model_comparison.png'), dpi=300, bbox_inches='tight')
         print(f"✓ Saved: model_comparison.png")
         plt.close()
-    
+
     # ====== Plot 2: Optimization History (if available) ======
     has_optimization = any(f'{target}_optimization' in results for target in available_targets)
-    
+
     if has_optimization:
         fig, axes = plt.subplots(1, len(available_targets), figsize=(7*len(available_targets), 6))
-        
+
         if len(available_targets) == 1:
             axes = [axes]
-        
+
         for idx, target in enumerate(available_targets):
             ax = axes[idx]
             opt_key = f'{target}_optimization'
-            
+
             if opt_key in results:
                 history = results[opt_key]['history']
                 
-                ax.plot(history['iteration'], history['best_fitness'],
-                       'b-', linewidth=2, label='Best Fitness')
-                ax.plot(history['iteration'], history['mean_fitness'],
-                       'r--', linewidth=1.5, label='Mean Fitness', alpha=0.7)
-                ax.fill_between(history['iteration'],
-                               history['best_fitness'],
-                               history['mean_fitness'],
-                               alpha=0.2, color='gray')
+                # Plot best fitness
+                if 'best_fitness' in history:
+                    generations = range(1, len(history['best_fitness']) + 1)
+                    ax.plot(generations, history['best_fitness'], 
+                           'b-', linewidth=2, label='Best R²')
                 
-                ax.set_xlabel('Iteration', fontsize=12, fontweight='bold')
-                ax.set_ylabel('Fitness (Lower is Better)', fontsize=12, fontweight='bold')
+                # Plot mean fitness if available
+                if 'mean_fitness' in history:
+                    ax.plot(generations, history['mean_fitness'], 
+                           'r--', linewidth=1.5, alpha=0.6, label='Mean R²')
+                
+                ax.set_xlabel('Generation', fontsize=12, fontweight='bold')
+                ax.set_ylabel('R² Score', fontsize=12, fontweight='bold')
                 ax.set_title(f'{target} - Hyperparameter Optimization',
                             fontsize=14, fontweight='bold')
-                ax.legend(fontsize=10)
+                ax.legend(loc='best')
                 ax.grid(True, alpha=0.3)
-            else:
-                ax.text(0.5, 0.5, f'No optimization for {target}',
-                       ha='center', va='center', fontsize=12)
-                ax.set_xticks([])
-                ax.set_yticks([])
-        
+
         plt.tight_layout()
         plt.savefig(os.path.join(output_dir, 'optimization_history.png'), dpi=300, bbox_inches='tight')
         print(f"✓ Saved: optimization_history.png")
         plt.close()
-    
-    print(f"\n✅ Report generation complete!")
-    print(f"  Files saved in: {output_dir}/")
+
+    # ====== Plot 3: Predictions vs Actual ======
+    if results.get('models'):
+        fig, axes = plt.subplots(1, len(available_targets), figsize=(7*len(available_targets), 6))
+
+        if len(available_targets) == 1:
+            axes = [axes]
+
+        for idx, target in enumerate(available_targets):
+            if target in results['models']:
+                ax = axes[idx]
+                test_results = results['models'][target]['test_results']
+                
+                y_true = test_results.get('y_true', [])
+                predictions = test_results.get('predictions', [])
+                
+                # Scatter plot
+                ax.scatter(y_true, predictions, alpha=0.5, s=20)
+                
+                # Perfect prediction line
+                min_val = min(min(y_true) if len(y_true) > 0 else 0, 
+                             min(predictions) if len(predictions) > 0 else 0)
+                max_val = max(max(y_true) if len(y_true) > 0 else 1, 
+                             max(predictions) if len(predictions) > 0 else 1)
+                ax.plot([min_val, max_val], [min_val, max_val], 
+                       'r--', linewidth=2, label='Perfect Prediction')
+                
+                ax.set_xlabel(f'Actual {target}', fontsize=12, fontweight='bold')
+                ax.set_ylabel(f'Predicted {target}', fontsize=12, fontweight='bold')
+                ax.set_title(f'{target} - Predictions vs Actual\nR² = {test_results["r2"]:.4f}',
+                            fontsize=14, fontweight='bold')
+                ax.legend(loc='best')
+                ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'predictions_vs_actual.png'), dpi=300, bbox_inches='tight')
+        print(f"✓ Saved: predictions_vs_actual.png")
+        plt.close()
+
+    # ====== Print Summary Report ======
+    print(f"\n{'='*80}")
+    print("📊 PERFORMANCE SUMMARY")
+    print(f"{'='*80}")
+
+    for target in available_targets:
+        print(f"\n🎯 {target} Prediction:")
+        print(f"{'─'*80}")
+
+        # Determine target key for baseline
+        if target == 'ROP':
+            target_key = 'rop'
+        elif target == 'Surface_Torque':
+            target_key = 'torque'
+        else:
+            target_key = target.lower()
+
+        # Baseline results
+        if results.get('baseline') and target_key in results['baseline']:
+            baseline = results['baseline'][target_key]
+            print(f"\n  Baseline Models:")
+            print(f"    Ridge Regression:")
+            print(f"      R² = {baseline['ridge_r2']:.4f}, RMSE = {baseline['ridge_rmse']:.4f}")
+            print(f"    Random Forest:")
+            print(f"      R² = {baseline['rf_r2']:.4f}, RMSE = {baseline['rf_rmse']:.4f}")
+
+        # XGBoost results
+        if target in results.get('models', {}):
+            xgb_results = results['models'][target]['test_results']
+            print(f"\n  XGBoost Model:")
+            print(f"    R²   = {xgb_results['r2']:.4f}")
+            print(f"    RMSE = {xgb_results['rmse']:.4f}")
+            print(f"    AARE = {xgb_results['aare']:.2f}%")
+
+            # Best parameters if available
+            if results['models'][target].get('best_params'):
+                print(f"\n  Optimized Hyperparameters:")
+                for param, value in results['models'][target]['best_params'].items():
+                    print(f"    {param}: {value}")
+
+    print(f"\n{'='*80}")
+    print("✅ Report generation completed!")
+    print(f"{'='*80}\n")
+
 
 
 def main():
@@ -530,8 +614,8 @@ def main():
     print(f"{'='*80}")
     
     # Configuration
-    TRAIN_FILE = r"E:\Asmari\Data\drill operation\human edit\Bit Data#1214#RR#34.xlsx"
-    TEST_FILE = r"E:\Asmari\Data\drill operation\human edit\Bit Data#1214#MI#131.xlsx"
+    TRAIN_FILE = r"E:\Data\pure\drill operation\human edit\Bit Data#1214#RR#34.xlsx"
+    TEST_FILE = r"E:\Data\pure\drill operation\human edit\Bit Data#1214#MI#131.xlsx"
     OPTIMIZE_HYPERPARAMS = False  # Set to True to enable optimization
     
     # Load data

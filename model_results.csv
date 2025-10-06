@@ -1,4 +1,0 @@
-Metric,ROP (Train),ROP (Test),Torque (Train),Torque (Test)
-RMSE,0.5936,1.7142,197.2739,769.8555
-AARE (%),11.65,34.95,3.28,15.77
-R²,0.9067,0.2121,0.9585,0.4899
