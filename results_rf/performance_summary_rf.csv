@@ -1,0 +1,2 @@
+Target,Train R²,Test R²,Train RMSE,Test RMSE,Train AARE,Test AARE
+ROP,0.5866,-0.4144,1.3036,2.6181,31.23%,34.10%
