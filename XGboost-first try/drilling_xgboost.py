@@ -47,20 +47,30 @@ class DrillingXGBoostPredictor:
         y_scaled = self.scaler_y.fit_transform(y.reshape(-1, 1)).flatten()
         return X_scaled, y_scaled
     
-    def train(self, X_train, y_train, X_val=None, y_val=None, verbose=True):
-        """Train the XGBoost model with early stopping"""
+    def train(self, X_train, y_train, X_val, y_val):
+        """
+        Train the XGBoost model with validation set
         
-        # Prepare data
+        Args:
+            X_train: Training features
+            y_train: Training target
+            X_val: Validation features
+            y_val: Validation target
+        """
+        print(f"Starting training with LR={self.learning_rate}, Max Depth={self.max_depth}, N_estimators={self.n_estimators}...")
+        
+        # Convert to numpy arrays if needed
+        X_train = np.array(X_train)
+        y_train = np.array(y_train)
+        X_val = np.array(X_val)
+        y_val = np.array(y_val)
+        
+        # Scale the data
         X_train_scaled, y_train_scaled = self.prepare_data(X_train, y_train)
+        X_val_scaled = self.scaler_X.transform(X_val)
+        y_val_scaled = self.scaler_y.transform(y_val.reshape(-1, 1)).flatten()
         
-        # Prepare validation data if provided
-        eval_set = None
-        if X_val is not None and y_val is not None:
-            X_val_scaled = self.scaler_X.transform(X_val)
-            y_val_scaled = self.scaler_y.transform(y_val.reshape(-1, 1)).flatten()
-            eval_set = [(X_val_scaled, y_val_scaled)]
-        
-        # Initialize XGBoost model
+        # Initialize model
         self.model = xgb.XGBRegressor(
             n_estimators=self.n_estimators,
             max_depth=self.max_depth,
@@ -72,31 +82,19 @@ class DrillingXGBoostPredictor:
             reg_alpha=self.reg_alpha,
             reg_lambda=self.reg_lambda,
             random_state=42,
-            n_jobs=-1,
-            verbosity=0
+            n_jobs=-1
         )
         
-        if verbose:
-            print(f"Starting training with LR={self.learning_rate}, Max Depth={self.max_depth}, N_estimators={self.n_estimators}...")
+        # Train WITHOUT early stopping
+        self.model.fit(
+            X_train_scaled, 
+            y_train_scaled,
+            eval_set=[(X_val_scaled, y_val_scaled)],
+            verbose=False
+        )
         
-        # Train with early stopping if validation set provided
-        if eval_set is not None:
-            self.model.fit(
-                X_train_scaled, 
-                y_train_scaled,
-                eval_set=eval_set,
-                early_stopping_rounds=50,
-                verbose=verbose
-            )
-            self.best_iteration = self.model.best_iteration
-            if verbose:
-                print(f"Training completed! Best iteration: {self.best_iteration}")
-        else:
-            self.model.fit(X_train_scaled, y_train_scaled)
-            if verbose:
-                print("Training completed!")
-        
-        return self.model
+        print("✓ Training completed!")
+
     
     def predict(self, X):
         """Make predictions"""
