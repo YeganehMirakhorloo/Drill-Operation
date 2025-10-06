@@ -113,25 +113,27 @@ class DrillingXGBoostPredictor:
     def evaluate(self, X_test, y_test):
         """Evaluate model performance"""
         predictions = self.predict(X_test)
-        
+
         mse = mean_squared_error(y_test, predictions)
         rmse = np.sqrt(mse)
         r2 = r2_score(y_test, predictions)
-        
+
         # Calculate AARE (Average Absolute Relative Error)
         mask = y_test != 0
         if np.any(mask):
             aare = np.mean(np.abs((y_test[mask] - predictions[mask]) / y_test[mask])) * 100
         else:
             aare = np.inf
-        
+
         return {
             'mse': mse,
             'rmse': rmse,
             'r2': r2,
             'aare': aare,
-            'predictions': predictions
+            'predictions': predictions,
+            'y_true': y_test  # ✅ ADDED: Store actual values for plotting
         }
+
     
     def get_feature_importance(self):
         """Get feature importance scores"""
