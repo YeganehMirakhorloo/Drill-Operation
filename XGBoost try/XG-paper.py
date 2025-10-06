@@ -598,8 +598,8 @@ if __name__ == "__main__":
     
     # Load data
     train_data, test_data = optimizer.load_data(
-        train_path=r'E:\Asmari\Data\drill operation\human edit\Bit Data#1214#RR#34.xlsx',
-        test_path=r'E:\Asmari\Data\drill operation\human edit\Bit Data#1214#MI#131.xlsx',
+        train_path=r'E:\Data\pure\drill operation\human edit\Bit Data#1214#RR#34.xlsx',
+        test_path=r'E:\Data\pure\drill operation\human edit\Bit Data#1214#MI#131.xlsx',
         train_header_row=0,
         test_header_row=2
     )
