@@ -6,7 +6,7 @@ class GaussianNoiseAugmenter:
     Multiplies dataset by adding noisy versions
     """
     
-    def __init__(self, noise_levels=[0.05, 0.10, 0.20], random_state=42):
+    def __init__(self, noise_levels=[0.10], random_state=42):
         """
         Args:
             noise_levels: List of noise percentages (e.g., [0.05, 0.10, 0.20])

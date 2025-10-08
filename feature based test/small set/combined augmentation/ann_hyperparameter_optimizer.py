@@ -16,7 +16,7 @@ def ann_objective(params, X, y):
     dropout_rate = np.clip(params[1], 0.2, 0.5)
 
     # Map lr_index to one of three valid learning rates
-    valid_lrs = [0.001, 0.0005, 0.0001]
+    valid_lrs = [0.01, 0.001]
     lr_index = int(np.clip(params[2], 0, 2))
     learning_rate = valid_lrs[lr_index]
 
@@ -29,7 +29,7 @@ def ann_objective(params, X, y):
     # AUGMENT TRAINING DATA (not validation!)
     X_train_aug, y_train_aug = augment_training_data(
         X_train, y_train,
-        noise_levels=[0.05, 0.10, 0.20],
+        noise_levels=[0.10],
         verbose=False  # Silent during optimization
     )
 
@@ -57,7 +57,7 @@ def optimize_ann_hyperparameters(data, target_column='ROP', pop_size=10, max_ite
     bounds = [
         (4, 16),     # hidden_neurons - single layer
         (0.2, 0.5),  # dropout
-        (0, 2),      # lr_index (0=0.001, 1=0.0005, 2=0.0001)
+        (0, 1),      # lr_index (0=0.001, 1=0.0005, 2=0.0001)
         (2, 8),      # batch_size
         (1e-5, 1e-3) # weight_decay
     ]
